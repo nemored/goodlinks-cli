@@ -186,7 +186,9 @@ tabular_json() {
       end;
 
     def pick($row; $col; $map):
-      if $map | has($col) then
+      if $formatter == "links" and $col == "STARRED" then
+        if $row.starred == true then "*" else "" end
+      elif $map | has($col) then
         $row | getpath($map[$col]) | clean
       else
         error("unknown output column for " + $formatter + ": " + $col)
