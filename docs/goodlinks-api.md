@@ -1,108 +1,241 @@
-# GoodLinks API
+# GoodLinks API Specification
 
-- [Overview](#overview)
-- [Getting Started](#getting-started)
-- [Request and Response Formats](#request-and-response-formats)
+GoodLinks exposes a local HTTP API for reading and modifying the
+library stored by the GoodLinks app. The API is intended for trusted
+applications, extensions, and automation scripts running on the same
+computer as GoodLinks.
+
+The API is available in GoodLinks 3.2 and later.
+
+## Contents
+
+- [Service Model](#service-model)
 - [Authentication](#authentication)
-- [Links](#links)
-- [Lists](#lists)
-- [Tags](#tags)
-- [Highlights](#highlights)
+- [Protocol Conventions](#protocol-conventions)
+- [Data Types](#data-types)
+- [Schemas](#schemas)
+- [Common Query Parameters](#common-query-parameters)
+- [Endpoints](#endpoints)
+- [Errors](#errors)
+- [Examples](#examples)
 
-## Overview
+## Service Model
 
-The GoodLinks API provides access to your local GoodLinks library. Use
-it to build companion apps, extensions, or automation scripts that can
-read and modify your links, tags, and highlights.
+### Origin
 
-The API runs as a built-in web server on your computer and is designed
-for trusted applications running on the same machine. All communication
-happens over `localhost`, keeping your data secure and private.
-
-**Note:** The API is available from GoodLinks 3.2.
-
-## Getting Started
-
-Before making API calls, you'll need to:
-
-1. **Enable the API** in GoodLinks settings.
-2. **Get the API token** from GoodLinks settings.
-
-## Request and Response Formats
-
-### Base URL
-
-All API endpoints are prefixed with `/api/v1`. Combine this with the API
-address:
+The API server is built into GoodLinks and listens on a fixed localhost
+address. The base URL is:
 
 ```text
 http://localhost:9428/api/v1
 ```
 
+All endpoints documented in this specification are relative to
+`/api/v1`.
+
+### Availability
+
+Clients must treat the API as available only while GoodLinks is running
+and the API is enabled in GoodLinks settings.
+
+Before making requests, a user must:
+
+1. Enable the API in GoodLinks settings.
+2. Copy the API token from GoodLinks settings.
+
+If the API token is changed, clients should reload their configuration
+before sending additional requests.
+
+### Transport
+
+The API uses HTTP over localhost. It is designed for same-machine
+clients and does not define a remote access or multi-user authorization
+model.
+
+## Authentication
+
+Every request to an `/api/*` endpoint must include an API token in the
+`Authorization` header using the Bearer scheme:
+
+```http
+Authorization: Bearer <token>
+```
+
+Requests with a missing, malformed, or invalid token fail with
+`401 Unauthorized`.
+
+Clients should treat the token as a password. Do not commit it to source
+control, log it, or expose it to untrusted processes.
+
+## Protocol Conventions
+
 ### HTTP Methods
 
-The API follows REST conventions:
+The API uses the following methods:
 
-- `GET` - Retrieve resources (links, tags, etc.).
-- `POST` - Create new resources.
-- `PATCH` - Update resources.
-- `DELETE` - Delete resources.
+| Method | Semantics |
+| --- | --- |
+| `GET` | Retrieve resources or derived content. |
+| `POST` | Create a resource or perform an upsert operation. |
+| `PATCH` | Update selected fields on an existing resource. |
+| `DELETE` | Delete one or more resources. |
 
-Using the wrong HTTP method returns `405 Method Not Allowed`.
-
-### Request Headers
-
-Include these headers in your requests:
-
-- **Authorization**: `Bearer <token>` (required for all `/api/*`
-  endpoints).
-- **Content-Type**: `application/json` (required for requests with a
-  body).
+If an endpoint path exists but the method is unsupported, the server
+returns `405 Method Not Allowed`.
 
 ### Request Bodies
 
-When sending data (POST, PATCH requests):
+Request bodies, when required, must be UTF-8 encoded JSON objects and
+must include:
 
-- Use UTF-8 encoded JSON.
-- Unknown fields in the request body are ignored.
-- If required fields are missing, the API returns `400 Bad Request` with
-  details about what is missing.
+```http
+Content-Type: application/json
+```
 
-**Example:**
+Unknown fields in JSON request bodies are ignored. Missing required
+fields, invalid field types, invalid parameter values, invalid date
+formats, and values that exceed documented limits fail with
+`400 Bad Request`.
+
+### Response Bodies
+
+JSON responses use UTF-8 encoded JSON. Endpoints that return article
+content or exported highlights return a non-JSON text body as documented
+for the endpoint.
+
+Successful `DELETE` requests return `204 No Content` with no response
+body.
+
+### Timestamps
+
+All timestamp values are ISO 8601 strings in UTC, for example:
+
+```text
+2025-11-11T15:04:05Z
+```
+
+Timestamp query parameters and request fields must use this format.
+
+### Booleans
+
+Boolean query parameters accept `true` or `false`.
+
+### Pagination
+
+List endpoints use offset pagination:
+
+| Parameter | Type | Default | Constraints |
+| --- | --- | --- | --- |
+| `limit` | integer | `20` | Minimum `1`, maximum `1000`. |
+| `offset` | integer | `0` | Number of matching items to skip. |
+
+Paginated JSON responses have this envelope:
 
 ```json
 {
+  "data": [],
+  "hasMore": false
+}
+```
+
+`hasMore` is `true` when additional matching items are available after
+the current page.
+
+## Data Types
+
+| Type | Definition |
+| --- | --- |
+| `ID` | String identifier assigned by GoodLinks. |
+| `URL` | HTTP or HTTPS URL. Link creation accepts URLs up to 2000 characters. |
+| `Timestamp` | ISO 8601 UTC timestamp. |
+| `Tag` | Non-empty string up to 100 characters. Hierarchical tags use `/`, such as `technology/programming`. |
+| `Nullable<T>` | Either a value of type `T` or JSON `null`. |
+
+## Schemas
+
+### Link
+
+Represents a saved link in the GoodLinks library.
+
+| Field | Type | Nullable | Description |
+| --- | --- | --- | --- |
+| `id` | string | no | Unique link identifier. |
+| `url` | string | no | Full saved URL. |
+| `title` | string | yes | Article or page title. |
+| `summary` | string | yes | Summary or description. |
+| `author` | string | yes | Author name when available. |
+| `tags` | array of strings | yes | Tags associated with the link. Returns `null` when no tags are set. |
+| `wordCount` | integer | yes | Estimated article word count. |
+| `starred` | boolean | no | Whether the link is starred. |
+| `highlighted` | boolean | no | Whether the link has at least one highlight. |
+| `addedAt` | string | no | Time the link was saved. |
+| `modifiedAt` | string | no | Time the link was last modified. |
+| `readAt` | string | yes | Time the link was marked read. `null` means unread. |
+
+Example:
+
+```json
+{
+  "id": "abc123",
   "url": "https://example.com/article",
-  "title": "Example Article"
+  "title": "Example Article Title",
+  "summary": "This is a brief summary of the article.",
+  "author": "John Doe",
+  "tags": ["technology", "programming"],
+  "wordCount": 1250,
+  "starred": false,
+  "highlighted": false,
+  "addedAt": "2025-01-15T10:30:00Z",
+  "modifiedAt": "2025-01-15T10:30:00Z",
+  "readAt": "2025-01-16T14:20:00Z"
 }
 ```
 
-### Response Format
+### Link List
 
-Successful responses return JSON objects with resource data. Some
-endpoints include pagination metadata:
+Represents a visible GoodLinks list.
 
-- `hasMore` (boolean) - Whether there are more items available beyond
-  the current page.
+| Field | Type | Nullable | Description |
+| --- | --- | --- | --- |
+| `id` | string | no | List identifier. |
+| `name` | string | no | Display name. |
 
-**Example success response:**
+### Highlight
+
+Represents a highlight attached to a link.
+
+| Field | Type | Nullable | Description |
+| --- | --- | --- | --- |
+| `id` | string | no | Unique highlight identifier. |
+| `linkID` | string | no | ID of the link that owns the highlight. |
+| `content` | string | no | Highlighted text as plain text. |
+| `markdownContent` | string | no | Highlighted text as Markdown. |
+| `note` | string | yes | Optional annotation. |
+| `createdAt` | string | no | Time the highlight was created. |
+
+Example:
 
 ```json
 {
-  "data": [...],
-  "hasMore": true
+  "id": "highlight123",
+  "linkID": "abc123",
+  "content": "This is an important quote from the article.",
+  "markdownContent": "This is an **important** quote from the article.",
+  "note": "Key insight",
+  "createdAt": "2025-01-15T10:30:00Z"
 }
 ```
 
-### Error Responses
+### Error
 
-When something goes wrong, you'll receive an error response with:
+Error responses are JSON objects.
 
-- `error` - A human-readable error message.
-- `details` - (Optional) Additional information to help diagnose the
-  issue.
+| Field | Type | Nullable | Description |
+| --- | --- | --- | --- |
+| `error` | string | no | Human-readable error message. |
+| `details` | any | yes | Optional diagnostic details. |
 
-**Example error response:**
+Example:
 
 ```json
 {
@@ -114,406 +247,103 @@ When something goes wrong, you'll receive an error response with:
 }
 ```
 
-### Common Errors
+## Common Query Parameters
 
-The following errors can occur on any endpoint:
+### Link Search Parameters
 
-- **`400 Bad Request`** - Invalid request data (e.g., missing required
-  fields, invalid parameter values, invalid date format, field too
-  long).
-- **`401 Unauthorized`** - Authentication token is missing or invalid.
+These parameters are used by `GET /links` and, where noted, by
+`GET /lists/{list}`.
 
-### Timestamps
+| Parameter | Type | Repeated | Description |
+| --- | --- | --- | --- |
+| `search` | string | no | Searches title, summary, content, URL, and author. |
+| `tag` | string | yes | Returns links with at least one of the specified tags. Ignored for `GET /lists/untagged`. |
+| `starred` | boolean | no | `true` returns starred links; `false` returns unstarred links. Only supported by `GET /links`. |
+| `read` | boolean | no | `true` returns read links; `false` returns unread links. Only supported by `GET /links`. |
+| `tagged` | boolean | no | `true` returns tagged links; `false` returns untagged links. Only supported by `GET /links`. |
+| `highlighted` | boolean | no | `true` returns links with highlights; `false` returns links without highlights. Only supported by `GET /links`. |
+| `wordCountMin` | integer | no | Minimum word count. Only supported by `GET /links`. |
+| `wordCountMax` | integer | no | Maximum word count. Only supported by `GET /links`. |
+| `addedAfter` | timestamp | no | Returns links added after this timestamp. Only supported by `GET /links`. |
+| `addedBefore` | timestamp | no | Returns links added before this timestamp. Only supported by `GET /links`. |
+| `readAfter` | timestamp | no | Returns links read after this timestamp. Only supported by `GET /links`. |
+| `readBefore` | timestamp | no | Returns links read before this timestamp. Only supported by `GET /links`. |
+| `sort` | string | no | Sort order. Only supported by `GET /links`. |
+| `limit` | integer | no | Page size. |
+| `offset` | integer | no | Page offset. |
 
-All date and time values use ISO-8601 format in UTC timezone:
-`2025-11-11T15:04:05Z`.
+Valid `sort` values for `GET /links`:
 
-## Authentication
+| Value | Sort order |
+| --- | --- |
+| `newestSaved` | Newest saved first. This is the default. |
+| `oldestSaved` | Oldest saved first. |
+| `newestRead` | Newest read first. |
+| `oldestRead` | Oldest read first. |
+| `shortest` | Shortest articles first. |
+| `longest` | Longest articles first. |
+| `titleA` | Title ascending, A-Z. |
+| `titleZ` | Title descending, Z-A. |
 
-The API uses token-based authentication to secure access to your
-library. You'll need to include your API token with every request.
+### Highlight Search Parameters
 
-### Setting Up Authentication
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `q` | string | Searches highlight content and notes. |
+| `linkID` | string | Returns highlights belonging to a link. |
+| `content` | string | Returns highlights whose content contains this text. |
+| `note` | string | Returns highlights whose note contains this text. |
+| `createdAfter` | timestamp | Returns highlights created after this timestamp. |
+| `createdBefore` | timestamp | Returns highlights created before this timestamp. |
+| `sort` | string | Highlight sort order. |
+| `limit` | integer | Page size. |
+| `offset` | integer | Page offset. |
 
-Get the API credentials in GoodLinks settings:
+Valid highlight `sort` values:
 
-- Go to Settings > API.
-- Copy the API token.
-
-**Important:** After changing the API token or API address, restart any
-applications or scripts that use the API so they pick up the new values.
+| Value | Sort order |
+| --- | --- |
+| `newest` | Newest highlights first. This is the default. |
+| `oldest` | Oldest highlights first. |
+| `linkID` | Sort by link ID. |
+| `content` | Sort by content alphabetically. |
+| `note` | Sort by note alphabetically. |
 
-### Using Authentication
+## Endpoints
 
-Include the API token in the `Authorization` header using the `Bearer`
-scheme. Here are examples:
+### `GET /links`
 
-**Using curl:**
+Retrieves links. The response shape depends on the query parameters:
 
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  http://localhost:9428/api/v1/links
-```
+- If `url` is provided, the endpoint returns a single `Link`.
+- If `url` is omitted, the endpoint returns a paginated list of `Link`
+  objects.
 
-**Using JavaScript (fetch):**
+#### Get Link by URL
 
-```javascript
-fetch("http://localhost:9428/api/v1/links", {
-  headers: {
-    Authorization: "Bearer your-api-token",
-  },
-});
-```
+Query parameters:
 
-**Using Python (requests):**
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `url` | string | yes | URL-encoded URL of the link to retrieve. |
 
-```python
-import requests
+Response:
 
-headers = {
-    "Authorization": "Bearer your-api-token",
-}
+- `200 OK` with a `Link`.
 
-requests.get("http://localhost:9428/api/v1/links", headers=headers)
-```
+Errors:
 
-### Security Best Practices
+- `404 Not Found` if no link with the specified URL exists.
 
-- **Protect your token**: Treat your API token like a password. Never
-  share it or commit it to version control.
-- **Rotate tokens**: Regenerate your API token periodically, and
-  immediately if you suspect it has been compromised.
-- **Trust your apps**: Only use the API with applications you trust,
-  since they'll have full access to your library.
+#### Search Links
 
-### Authentication Errors
+Query parameters:
 
-If your token is missing or incorrect, you'll receive a
-`401 Unauthorized` response. Check that:
+- All [Link Search Parameters](#link-search-parameters), except `url`.
 
-- Your API token matches what's shown in GoodLinks settings.
-- The `Authorization` header is included in your request.
-- The token is prefixed with `Bearer `, including the trailing space.
+Response:
 
-## Links
-
-### Link Metadata
-
-Links returned by the API include the following fields:
-
-- **`id`** (string) - Unique identifier for the link.
-- **`url`** (string) - The full URL of the saved link.
-- **`title`** (string, nullable) - The title of the article or page.
-- **`summary`** (string, nullable) - A brief summary or description of
-  the content.
-- **`author`** (string, nullable) - The author of the article, if
-  available.
-- **`tags`** (array of strings, nullable) - Tags associated with the
-  link. Returns `null` if no tags are set.
-- **`wordCount`** (integer, nullable) - Estimated number of words in
-  the article content.
-- **`starred`** (boolean) - Whether the link has been starred.
-- **`highlighted`** (boolean) - Whether the link has any highlights.
-- **`addedAt`** (string) - ISO-8601 timestamp indicating when the link
-  was saved to the library.
-- **`modifiedAt`** (string) - ISO-8601 timestamp indicating when the
-  link was last modified.
-- **`readAt`** (string, nullable) - ISO-8601 timestamp indicating when
-  the link was marked as read.
-
-**Example link object:**
-
-```json
-{
-  "id": "abc123",
-  "url": "https://example.com/article",
-  "title": "Example Article Title",
-  "summary": "This is a brief summary of the article.",
-  "author": "John Doe",
-  "tags": ["technology", "programming"],
-  "wordCount": 1250,
-  "starred": false,
-  "highlighted": false,
-  "addedAt": "2025-01-15T10:30:00Z",
-  "modifiedAt": "2025-01-15T10:30:00Z",
-  "readAt": "2025-01-16T14:20:00Z"
-}
-```
-
-### Get a Link by ID
-
-Retrieve a single link by its ID.
-
-**Endpoint:** `GET /api/v1/links/{id}`
-
-**Path Parameters:**
-
-- **`id`** (string, required) - The unique identifier of the link to
-  retrieve.
-
-**Response:**
-
-Returns a single link object with all metadata fields.
-
-**Errors:**
-
-- `404 Not Found` - Link with the specified ID does not exist.
-
-**Example Request:**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  http://localhost:9428/api/v1/links/abc123
-```
-
-**Example Response:**
-
-```json
-{
-  "id": "abc123",
-  "url": "https://example.com/article",
-  "title": "Example Article Title",
-  "summary": "This is a brief summary of the article.",
-  "author": "John Doe",
-  "tags": ["technology", "programming"],
-  "wordCount": 1250,
-  "starred": false,
-  "highlighted": false,
-  "addedAt": "2025-01-15T10:30:00Z",
-  "modifiedAt": "2025-01-15T10:30:00Z",
-  "readAt": "2025-01-16T14:20:00Z"
-}
-```
-
-### Get a Link by URL
-
-Retrieve a single link by its URL. This is useful when you have the URL
-but not the link ID.
-
-**Endpoint:** `GET /api/v1/links`
-
-**Query Parameters:**
-
-- **`url`** (string, required) - The URL of the link to retrieve. Must
-  be URL-encoded.
-
-**Note:** When the `url` parameter is provided, this endpoint returns a
-single link object. For retrieving multiple links, see "Search Links"
-below.
-
-**Response:**
-
-Returns a single link object with all metadata fields, identical to the
-"Get a Link by ID" endpoint.
-
-**Errors:**
-
-- `404 Not Found` - Link with the specified URL does not exist.
-
-**Example Request:**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/links?url=https%3A%2F%2Fexample.com%2Farticle"
-```
-
-### Get Current Link
-
-Retrieve the link currently selected in GoodLinks.
-
-**Endpoint:** `GET /api/v1/links/current`
-
-**Response:**
-
-Returns a single link object with all metadata fields, identical to the
-"Get a Link by ID" endpoint.
-
-**Errors:**
-
-- `404 Not Found` - No link is currently selected in GoodLinks.
-
-**Example Request:**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  http://localhost:9428/api/v1/links/current
-```
-
-### Get Links in List
-
-Retrieve links from a specific main list with optional filtering and
-pagination. Links are sorted by date added (newest first) by default.
-
-**Endpoint:** `GET /api/v1/lists/{list}`
-
-**Path Parameters:**
-
-- **`list`** (string, required) - The main list to retrieve links
-  from. Valid values:
-  - `unread` - Links that haven't been read.
-  - `read` - Links that have been read.
-  - `starred` - Links that have been starred.
-  - `untagged` - Links that have no tags.
-  - `highlighted` - Links that have highlights.
-  - `all` - All links in the library.
-
-**Query Parameters:**
-
-- **`search`** (string, optional) - Search text to filter links by
-  title, summary, content, URL, and author.
-- **`tag`** (string, optional) - Tag to filter by. This parameter can
-  be specified multiple times. Only links with at least one of the
-  specified tags will be returned. This parameter is ignored when
-  `list=untagged`.
-- **`includeRead`** (boolean, optional) - Whether to include read
-  links in the results. Only relevant for `starred`, `untagged` and
-  `highlighted` lists. Defaults to `false`.
-- **`limit`** (integer, optional) - Maximum number of links to return
-  per page. Must be between 1 and 1000. Defaults to `20` if not
-  specified.
-- **`offset`** (integer, optional) - Number of items to skip before
-  returning results. Defaults to `0`.
-
-**Response:**
-
-Response format is identical to "Search Links".
-
-**Errors:**
-
-- `404 Not Found` - Invalid list type specified in the path.
-
-**Example Request (Unread Links):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/lists/unread?limit=20"
-```
-
-**Example Request (Starred Links with Search):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/lists/starred?search=programming&includeRead=true&limit=10"
-```
-
-**Example Request (Tagged Links in Unread List):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/lists/unread?tag=technology&tag=programming&limit=50"
-```
-
-**Example Request (All Links with Pagination):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/lists/all?limit=20&offset=20"
-```
-
-### Search Links
-
-Search for links across your entire library with advanced filtering and
-sorting options. This endpoint searches through link titles, summaries,
-content, URLs, and author names.
-
-**Endpoint:** `GET /api/v1/links`
-
-**Note:** This endpoint shares the same path as "Get a Link by URL".
-When the `url` parameter is provided, it returns a single link. When
-search parameters (like `search`, `tag`, `starred`, etc.) are provided
-or no parameters are given, it returns a list of links matching the
-search criteria.
-
-**Query Parameters:**
-
-- **`search`** (string, optional) - Search query text. Searches across
-  title, summary, content, URL, and author.
-- **`tag`** (string, optional) - Tag to filter by. This parameter can
-  be specified multiple times. Only links with at least one of the
-  specified tags will be returned.
-- **`starred`** (boolean, optional) - Filter by starred status. `true`
-  returns only starred links, `false` returns only unstarred links.
-- **`read`** (boolean, optional) - Filter by read status. `true`
-  returns only read links, `false` returns only unread links.
-- **`tagged`** (boolean, optional) - Filter by whether links have
-  tags. `true` returns only tagged links, `false` returns only untagged
-  links.
-- **`highlighted`** (boolean, optional) - Filter by whether links have
-  highlights. `true` returns only links with highlights, `false` returns
-  only links without highlights.
-- **`wordCountMin`** (integer, optional) - Minimum word count to
-  filter by.
-- **`wordCountMax`** (integer, optional) - Maximum word count to
-  filter by.
-- **`addedAfter`** (string, optional) - ISO-8601 timestamp. Only
-  return links added after this date.
-- **`addedBefore`** (string, optional) - ISO-8601 timestamp. Only
-  return links added before this date.
-- **`readAfter`** (string, optional) - ISO-8601 timestamp. Only return
-  links read after this date.
-- **`readBefore`** (string, optional) - ISO-8601 timestamp. Only
-  return links read before this date.
-- **`sort`** (string, optional) - Sort order for results. Valid
-  values:
-  - `newestSaved` - Newest saved first (default)
-  - `oldestSaved` - Oldest saved first
-  - `newestRead` - Newest read first
-  - `oldestRead` - Oldest read first
-  - `shortest` - Shortest articles first
-  - `longest` - Longest articles first
-  - `titleA` - Title ascending (A-Z)
-  - `titleZ` - Title descending (Z-A)
-- **`limit`** (integer, optional) - Maximum number of links to return
-  per page. Must be between 1 and 1000. Defaults to `20` if not
-  specified.
-- **`offset`** (integer, optional) - Number of items to skip before
-  returning results. Defaults to `0`.
-
-**Response:**
-
-Returns an object containing:
-
-- **`data`** (array) - Array of link objects matching the search
-  criteria.
-- **`hasMore`** (boolean) - Whether there are more links available
-  beyond the current page.
-
-**Example Request (Simple Text Search):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/links?search=python&limit=20"
-```
-
-**Example Request (Search by Multiple Tags):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/links?tag=technology&tag=programming&limit=20"
-```
-
-**Example Request (Advanced Search with Filters):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/links?search=programming&tag=technology&tag=web&starred=true&read=false&sort=newestSaved&limit=10"
-```
-
-**Example Request (Date Range Search):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/links?addedAfter=2025-01-01T00:00:00Z&addedBefore=2025-01-31T23:59:59Z&sort=oldestSaved"
-```
-
-**Example Request (Word Count Filter):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/links?wordCountMin=1000&wordCountMax=5000&sort=longest"
-```
-
-**Example Response:**
+- `200 OK` with a paginated link envelope:
 
 ```json
 {
@@ -531,70 +361,340 @@ curl -H "Authorization: Bearer your-api-token" \
       "addedAt": "2025-01-15T10:30:00Z",
       "modifiedAt": "2025-01-15T10:30:00Z",
       "readAt": null
-    },
-    {
-      "id": "def456",
-      "url": "https://example.com/another",
-      "title": "Another Article",
-      "summary": "Another summary.",
-      "author": "Jane Smith",
-      "tags": ["technology"],
-      "wordCount": 800,
-      "starred": true,
-      "highlighted": true,
-      "addedAt": "2025-01-14T08:15:00Z",
-      "modifiedAt": "2025-01-14T08:15:00Z",
-      "readAt": "2025-01-15T12:00:00Z"
     }
   ],
   "hasMore": true
 }
 ```
 
+### `POST /links`
+
+Creates a link or updates an existing link with the same URL.
+
+If no metadata is supplied, GoodLinks attempts to fetch metadata
+automatically. When the URL already exists, fields supplied in the
+request update the existing link; omitted fields preserve existing
+values. `addedAt` is only used when creating a new link.
+
+Request body:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `url` | string | yes | HTTP or HTTPS URL. Maximum 2000 characters. |
+| `title` | string | no | Link title. Maximum 200 characters. Newlines are replaced with spaces and surrounding whitespace is trimmed. |
+| `summary` | string | no | Link summary. Maximum 400 characters. Newlines are replaced with spaces and surrounding whitespace is trimmed. |
+| `tags` | array of strings | no | Tags to associate with the link. Each tag must be non-empty and at most 100 characters. |
+| `read` | boolean | no | Marks the link read when `true`. Defaults to `false`. |
+| `starred` | boolean | no | Sets starred state. Defaults to `false`. |
+| `addedAt` | timestamp | no | Save time for a new link. Defaults to the current time. Future values are clamped to the current time. Ignored when updating an existing link. |
+
+Response:
+
+- `200 OK` with the created or updated `Link`.
+
+### `GET /links/current`
+
+Retrieves the link currently selected in GoodLinks.
+
+Response:
+
+- `200 OK` with a `Link`.
+
+Errors:
+
+- `404 Not Found` if no link is currently selected.
+
+### `GET /links/{id}`
+
+Retrieves a link by ID.
+
+Path parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` | string | Link ID. |
+
+Response:
+
+- `200 OK` with a `Link`.
+
+Errors:
+
+- `404 Not Found` if the link does not exist.
+
+### `PATCH /links/{id}`
+
+Updates selected metadata fields on a link.
+
+Path parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` | string | Link ID. |
+
+Request body:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `title` | string | Link title. Maximum 200 characters. Newlines are replaced with spaces and surrounding whitespace is trimmed. |
+| `summary` | string | Link summary. Maximum 400 characters. Newlines are replaced with spaces and surrounding whitespace is trimmed. |
+| `starred` | boolean | Sets starred state. |
+| `read` | boolean | `true` sets `readAt` to the current time. `false` clears `readAt`. |
+| `addedTags` | array of strings | Tags to add to the existing tag set. Existing tags are not duplicated. |
+| `removedTags` | array of strings | Tags to remove from the existing tag set. Missing tags are ignored. |
+| `tags` | array of strings | Replaces all tags. An empty array removes all tags. If provided, `addedTags` and `removedTags` are ignored. |
+
+Response:
+
+- `200 OK` with the updated `Link`.
+
+Errors:
+
+- `404 Not Found` if the link does not exist.
+
+### `DELETE /links`
+
+Deletes one or more links. Deleted links are moved to trash and can be
+recovered.
+
+Query parameters:
+
+| Parameter | Type | Repeated | Required | Description |
+| --- | --- | --- | --- | --- |
+| `id` | string | yes | yes | Link ID to delete. At least one ID is required. |
+
+Response:
+
+- `204 No Content`.
+
+Errors:
+
+- `404 Not Found` if all supplied link IDs are invalid.
+
+### `GET /links/{id}/content`
+
+Retrieves cached or downloaded article content for a link.
+
+Path parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` | string | Link ID. |
+
+Query parameters:
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `format` | string | `html` | Content format. Valid values are `html`, `plaintext`, and `markdown`. |
+| `autoDownload` | boolean | `true` | When `false`, GoodLinks returns only already cached article content. |
+
+Response:
+
+| `format` | Status | Content-Type | Body |
+| --- | --- | --- | --- |
+| `html` | `200 OK` | `text/html` | Article HTML. |
+| `plaintext` | `200 OK` | `text/plain` | Article plain text. |
+| `markdown` | `200 OK` | `text/markdown` | Article Markdown. |
+
+Errors:
+
+- `404 Not Found` if the link does not exist or no content is
+  available.
+
+### `GET /lists`
+
+Retrieves visible GoodLinks lists.
+
+Response:
+
+- `200 OK` with an array of `Link List` objects.
+
+Example:
+
+```json
+[
+  {
+    "id": "all",
+    "name": "All"
+  },
+  {
+    "id": "starred",
+    "name": "Starred"
+  }
+]
+```
+
+### `GET /lists/{list}`
+
+Retrieves links from a main list. Links are sorted by date added,
+newest first.
+
+Path parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `list` | string | Main list identifier. |
+
+Valid list identifiers:
+
+| Value | Description |
+| --- | --- |
+| `unread` | Links that have not been read. |
+| `read` | Links that have been read. |
+| `starred` | Links that have been starred. |
+| `untagged` | Links with no tags. |
+| `highlighted` | Links with highlights. |
+| `all` | All links in the library. |
+
+Query parameters:
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `search` | string | none | Searches title, summary, content, URL, and author. |
+| `tag` | string | none | Repeatable. Returns links with at least one supplied tag. Ignored when `list` is `untagged`. |
+| `includeRead` | boolean | `false` | Includes read links for the `starred`, `untagged`, and `highlighted` lists. |
+| `limit` | integer | `20` | Page size. Minimum `1`, maximum `1000`. |
+| `offset` | integer | `0` | Page offset. |
+
+Response:
+
+- `200 OK` with the same paginated link envelope used by
+  `GET /links`.
+
+Errors:
+
+- `404 Not Found` if `list` is not a valid list identifier.
+
+### `GET /tags`
+
+Retrieves all tags that have at least one link.
+
+Response:
+
+- `200 OK` with an array of strings.
+
+Example:
+
+```json
+["design", "technology", "technology/programming"]
+```
+
+### `GET /highlights`
+
+Searches highlights across the library.
+
+Query parameters:
+
+- All [Highlight Search Parameters](#highlight-search-parameters).
+
+Response:
+
+- `200 OK` with a paginated highlight envelope:
+
+```json
+{
+  "data": [
+    {
+      "id": "highlight123",
+      "linkID": "abc123",
+      "content": "This is an important quote from the article.",
+      "markdownContent": "This is an **important** quote from the article.",
+      "note": "Key insight",
+      "createdAt": "2025-01-15T10:30:00Z"
+    }
+  ],
+  "hasMore": true
+}
+```
+
+### `PATCH /highlights/{id}`
+
+Updates a highlight.
+
+Path parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` | string | Highlight ID. |
+
+Request body:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `note` | string | no | Highlight note. Use an empty string to clear the note. |
+
+Response:
+
+- `200 OK` with the updated `Highlight`.
+
+Errors:
+
+- `404 Not Found` if the highlight does not exist.
+
+### `GET /links/{id}/highlights/export`
+
+Exports highlights from a link using the export format template
+configured in GoodLinks settings.
+
+Path parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `id` | string | Link ID. |
+
+Response:
+
+- `200 OK`
+- `Content-Type: text/markdown`
+- Body contains the rendered Markdown export. The format follows the
+  user's configured Mustache export template.
+
+Errors:
+
+- `404 Not Found` if the link does not exist or the link has no
+  highlights.
+
+## Errors
+
+### Common Status Codes
+
+| Status | Meaning |
+| --- | --- |
+| `400 Bad Request` | The request is syntactically invalid or contains invalid data. |
+| `401 Unauthorized` | The API token is missing, malformed, or invalid. |
+| `404 Not Found` | The requested resource, list, content, or export does not exist. |
+| `405 Method Not Allowed` | The endpoint exists, but the HTTP method is not supported. |
+
+### Validation Failures
+
+The server returns `400 Bad Request` for invalid request data, including:
+
+- Missing required request fields.
+- Invalid JSON.
+- Invalid field types.
+- Invalid query parameter values.
+- Invalid timestamp formats.
+- URL values that are not HTTP or HTTPS URLs.
+- Values that exceed documented length limits.
+- `limit` values outside the range `1...1000`.
+
+## Examples
+
+### Search Unread Links
+
+```bash
+curl -H "Authorization: Bearer your-api-token" \
+  "http://localhost:9428/api/v1/links?search=python&read=false&limit=20"
+```
+
+### Get a Link by URL
+
+```bash
+curl -H "Authorization: Bearer your-api-token" \
+  "http://localhost:9428/api/v1/links?url=https%3A%2F%2Fexample.com%2Farticle"
+```
+
 ### Add a Link
-
-Add a new link to your library, or update an existing link if one with
-the same URL already exists. The link will be created or updated with
-the provided metadata, or GoodLinks will attempt to fetch metadata
-automatically if not provided.
-
-**Endpoint:** `POST /api/v1/links`
-
-**Request Body:**
-
-The request body must be a JSON object with the following fields:
-
-- **`url`** (string, required) - The URL of the link to add. Must be a
-  valid HTTP or HTTPS URL. Maximum length is 2000 characters.
-- **`title`** (string, optional) - The title for the link. Maximum
-  length is 200 characters. Newlines will be replaced with spaces and
-  the text will be trimmed.
-- **`summary`** (string, optional) - A summary or description for the
-  link. Maximum length is 400 characters. Newlines will be replaced with
-  spaces and the text will be trimmed.
-- **`tags`** (array of strings, optional) - Tags to associate with the
-  link. Each tag must be a non-empty string with a maximum length of 100
-  characters.
-- **`read`** (boolean, optional) - Whether to mark the link as read
-  immediately. Defaults to `false`. If `true`, the link's `readAt`
-  timestamp will be set to the current time.
-- **`starred`** (boolean, optional) - Whether to add the link to the
-  starred list. Defaults to `false`.
-- **`addedAt`** (string, optional) - ISO-8601 timestamp indicating
-  when the link was saved. Only used when creating a new link. If not
-  provided, defaults to the current time. If provided, must not be in
-  the future (will be clamped to current time). When updating an
-  existing link, this field is ignored.
-
-**Response:**
-
-Returns the created or updated link object with all metadata fields,
-including the `id`. If a link with the same URL already exists, it will
-be updated with the provided fields. Fields not provided in the request
-will preserve their existing values (except for `addedAt`, which is only
-set when creating a new link).
-
-**Example Request:**
 
 ```bash
 curl -H "Authorization: Bearer your-api-token" \
@@ -611,147 +711,20 @@ curl -H "Authorization: Bearer your-api-token" \
   http://localhost:9428/api/v1/links
 ```
 
-**Example Request (Minimal):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/article"}' \
-  http://localhost:9428/api/v1/links
-```
-
-**Example Request (With Custom Date):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://example.com/article",
-    "title": "Example Article",
-    "addedAt": "2025-01-15T10:30:00Z"
-  }' \
-  http://localhost:9428/api/v1/links
-```
-
-**Example Response:**
-
-```json
-{
-  "id": "abc123",
-  "url": "https://example.com/article",
-  "title": "Example Article Title",
-  "summary": "This is a brief summary of the article.",
-  "author": "John Doe",
-  "tags": ["technology", "programming"],
-  "starred": false,
-  "highlighted": false,
-  "addedAt": "2025-01-15T10:30:00Z",
-  "modifiedAt": "2025-01-15T10:30:00Z",
-  "readAt": "2025-01-16T14:20:00Z"
-}
-```
-
-### Edit a Link
-
-Update an existing link's metadata. Only the fields provided in the
-request will be updated; all other fields will remain unchanged.
-
-**Endpoint:** `PATCH /api/v1/links/{id}`
-
-**Path Parameters:**
-
-- **`id`** (string, required) - The ID of the link to update.
-
-**Request Body:**
-
-The request body must be a JSON object with the following optional
-fields:
-
-- **`title`** (string, optional) - The title for the link. Maximum
-  length is 200 characters. Newlines will be replaced with spaces and
-  the text will be trimmed.
-- **`summary`** (string, optional) - A summary or description for the
-  link. Maximum length is 400 characters. Newlines will be replaced with
-  spaces and the text will be trimmed.
-- **`starred`** (boolean, optional) - Whether to add the link to the
-  starred list or remove it.
-- **`read`** (boolean, optional) - Whether to mark the link as read or
-  unread. If set to `true`, the link's `readAt` timestamp will be set to
-  the current time. If set to `false`, the `readAt` timestamp will be
-  cleared.
-- **`addedTags`** (array of strings, optional) - Tags to add to the
-  link's existing tags. Tags that are already present are not
-  duplicated. Each tag must be a non-empty string with a maximum length
-  of 100 characters.
-- **`removedTags`** (array of strings, optional) - Tags to remove from
-  the link's existing tags. Tags that don't exist are ignored.
-- **`tags`** (array of strings, optional) - Replace all tags on the
-  link with the specified tags. If an empty array is provided, all tags
-  are removed. Each tag must be a non-empty string with a maximum length
-  of 100 characters. Note: If `tags` is provided, `addedTags` and
-  `removedTags` will be ignored.
-
-**Response:**
-
-Returns the updated link object with all metadata fields.
-
-**Errors:**
-
-- `404 Not Found` - The link ID does not exist.
-
-**Example Request (Update Title and Summary):**
+### Update Link Tags
 
 ```bash
 curl -H "Authorization: Bearer your-api-token" \
   -X PATCH \
   -H "Content-Type: application/json" \
   -d '{
-    "title": "Updated Article Title",
-    "summary": "Updated summary of the article."
+    "addedTags": ["technology"],
+    "removedTags": ["draft"]
   }' \
   http://localhost:9428/api/v1/links/abc123
 ```
 
-**Example Request (Mark as Read and Starred):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  -X PATCH \
-  -H "Content-Type: application/json" \
-  -d '{
-    "read": true,
-    "starred": true
-  }' \
-  http://localhost:9428/api/v1/links/abc123
-```
-
-**Example Request (Add Tags):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  -X PATCH \
-  -H "Content-Type: application/json" \
-  -d '{
-    "addedTags": ["technology", "programming"]
-  }' \
-  http://localhost:9428/api/v1/links/abc123
-```
-
-**Example Request (Remove Tags):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  -X PATCH \
-  -H "Content-Type: application/json" \
-  -d '{
-    "removedTags": ["programming"]
-  }' \
-  http://localhost:9428/api/v1/links/abc123
-```
-
-**Example Request (Replace All Tags):**
+### Replace Link Tags
 
 ```bash
 curl -H "Authorization: Bearer your-api-token" \
@@ -763,53 +736,7 @@ curl -H "Authorization: Bearer your-api-token" \
   http://localhost:9428/api/v1/links/abc123
 ```
 
-**Example Response:**
-
-```json
-{
-  "id": "abc123",
-  "url": "https://example.com/article",
-  "title": "Updated Article Title",
-  "summary": "Updated summary of the article.",
-  "author": "John Doe",
-  "tags": ["technology", "programming"],
-  "starred": true,
-  "highlighted": false,
-  "addedAt": "2025-01-15T10:30:00Z",
-  "modifiedAt": "2025-01-16T15:45:00Z",
-  "readAt": "2025-01-16T15:45:00Z"
-}
-```
-
-### Delete Links
-
-Delete one or more links. Links are moved to trash and can be recovered.
-
-**Endpoint:** `DELETE /api/v1/links`
-
-**Query Parameters:**
-
-- **`id`** (string, required) - Link ID to delete. This parameter can
-  be specified multiple times. Must contain at least one link ID.
-
-**Response:**
-
-Returns `204 No Content` with no response body.
-
-**Errors:**
-
-- `404 Not Found` - One or more link IDs do not exist (only returned
-  if all link IDs are invalid).
-
-**Example Request (Delete Single Link):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  -X DELETE \
-  "http://localhost:9428/api/v1/links?id=abc123"
-```
-
-**Example Request (Delete Multiple Links):**
+### Delete Multiple Links
 
 ```bash
 curl -H "Authorization: Bearer your-api-token" \
@@ -817,290 +744,21 @@ curl -H "Authorization: Bearer your-api-token" \
   "http://localhost:9428/api/v1/links?id=abc123&id=def456&id=ghi789"
 ```
 
-### Get Article Content
-
-Retrieve the article content of a link in HTML, plaintext, or markdown
-format.
-
-**Endpoint:** `GET /api/v1/links/{id}/content`
-
-**Path Parameters:**
-
-- **`id`** (string, required) - The unique identifier of the link.
-
-**Query Parameters:**
-
-- **`format`** (string, optional) - The format of the content to
-  return. Valid values:
-  - `html` - Returns the article content as HTML (default).
-  - `plaintext` - Returns the article content as plain text.
-  - `markdown` - Returns the article content as Markdown.
-- **`autoDownload`** (boolean, optional) - Defaults to `true`. Set it
-  to `false` to skip downloading and only return already cached article
-  content.
-
-**Response:**
-
-Returns the article content in the requested format. The response
-content type depends on the format:
-
-- `html` - `text/html`.
-- `plaintext` - `text/plain`.
-- `markdown` - `text/markdown`.
-
-**Errors:**
-
-- `404 Not Found` - Link with the specified ID does not exist or the
-  link has no content available.
-
-**Example Request (HTML Format):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/links/abc123/content?format=html"
-```
-
-**Example Request (Disable Auto-Download):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/links/abc123/content?format=html&autoDownload=false"
-```
-
-**Example Request (Plaintext Format):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/links/abc123/content?format=plaintext"
-```
-
-**Example Request (Markdown Format):**
+### Retrieve Article Markdown
 
 ```bash
 curl -H "Authorization: Bearer your-api-token" \
   "http://localhost:9428/api/v1/links/abc123/content?format=markdown"
 ```
 
-## Lists
-
-### Get Lists
-
-Retrieve all visible lists in your library.
-
-**Endpoint:** `GET /api/v1/lists`
-
-**Response:**
-
-Returns an array of list objects. Each object contains:
-
-- **`id`** (string) - Unique identifier for the list.
-- **`name`** (string) - The name of the list.
-
-**Example Request:**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  http://localhost:9428/api/v1/lists
-```
-
-**Example Response:**
-
-```json
-[
-  {
-    "id": "all",
-    "name": "All"
-  },
-  {
-    "id": "starred",
-    "name": "Starred"
-  }
-]
-```
-
-## Tags
-
-### Get Tags
-
-Retrieve all tags in your library. Only tags that have at least one link
-are returned.
-
-**Endpoint:** `GET /api/v1/tags`
-
-**Response:**
-
-Returns an array of tags (strings). For hierarchical tags, this includes
-the full path (e.g., `technology/programming`).
-
-**Example Request:**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  http://localhost:9428/api/v1/tags
-```
-
-**Example Response:**
-
-```json
-["design", "technology", "technology/programming"]
-```
-
-## Highlights
-
-### Highlight Metadata
-
-Highlights returned by the API include the following fields:
-
-- **`id`** (string) - Unique identifier for the highlight.
-- **`linkID`** (string) - The ID of the link this highlight belongs
-  to.
-- **`content`** (string) - The highlighted text content in plain text
-  format.
-- **`markdownContent`** (string) - The highlighted text content in
-  markdown format.
-- **`note`** (string, nullable) - An optional note or annotation
-  associated with the highlight.
-- **`createdAt`** (string) - ISO-8601 timestamp indicating when the
-  highlight was created.
-
-**Example highlight object:**
-
-```json
-{
-  "id": "highlight123",
-  "linkID": "abc123",
-  "content": "This is an important quote from the article.",
-  "markdownContent": "This is an **important** quote from the article.",
-  "note": "Key insight",
-  "createdAt": "2025-01-15T10:30:00Z"
-}
-```
-
 ### Search Highlights
 
-Search for highlights across your library. This endpoint searches
-through highlight content and notes, and supports filtering and sorting
-options.
-
-**Endpoint:** `GET /api/v1/highlights`
-
-**Query Parameters:**
-
-- **`q`** (string, optional) - Search query text. Searches through
-  highlight content and notes.
-- **`linkID`** (string, optional) - Filter highlights by link ID. Only
-  highlights belonging to the specified link will be returned.
-- **`content`** (string, optional) - Filter highlights by content
-  containing this text.
-- **`note`** (string, optional) - Filter highlights by note containing
-  this text.
-- **`createdAfter`** (string, optional) - ISO-8601 timestamp. Only
-  return highlights created after this date.
-- **`createdBefore`** (string, optional) - ISO-8601 timestamp. Only
-  return highlights created before this date.
-- **`sort`** (string, optional) - Sort order for results. Valid
-  values:
-  - `newest` - Newest highlights first (default)
-  - `oldest` - Oldest highlights first
-  - `linkID` - Sort by link ID
-  - `content` - Sort by content alphabetically
-  - `note` - Sort by note alphabetically
-- **`limit`** (integer, optional) - Maximum number of highlights to
-  return per page. Must be between 1 and 1000. Defaults to `20` if not
-  specified.
-- **`offset`** (integer, optional) - Number of items to skip before
-  returning results. Defaults to `0`.
-
-**Response:**
-
-Returns an object containing:
-
-- **`data`** (array) - Array of highlight objects matching the search
-  criteria.
-- **`hasMore`** (boolean) - Whether there are more highlights
-  available beyond the current page.
-
-**Example Request (Simple Text Search):**
-
 ```bash
 curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/highlights?q=important&limit=20"
+  "http://localhost:9428/api/v1/highlights?q=important&sort=newest&limit=20"
 ```
 
-**Example Request (Filter by Link):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/highlights?linkID=abc123&sort=newest"
-```
-
-**Example Request (Date Range Search):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/highlights?createdAfter=2025-01-01T00:00:00Z&createdBefore=2025-01-31T23:59:59Z&sort=oldest"
-```
-
-**Example Request (Advanced Search):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  "http://localhost:9428/api/v1/highlights?q=programming&linkID=abc123&note=insight&sort=newest&limit=10"
-```
-
-**Example Response:**
-
-```json
-{
-  "data": [
-    {
-      "id": "highlight123",
-      "linkID": "abc123",
-      "content": "This is an important quote from the article.",
-      "markdownContent": "This is an **important** quote from the article.",
-      "note": "Key insight",
-      "createdAt": "2025-01-15T10:30:00Z"
-    },
-    {
-      "id": "highlight456",
-      "linkID": "abc123",
-      "content": "Another highlighted section with programming concepts.",
-      "markdownContent": "Another highlighted section with `programming` concepts.",
-      "note": null,
-      "createdAt": "2025-01-14T08:15:00Z"
-    }
-  ],
-  "hasMore": true
-}
-```
-
-### Edit a Highlight
-
-Update an existing highlight's metadata. Only the fields provided in the
-request will be updated; all other fields will remain unchanged.
-
-**Endpoint:** `PATCH /api/v1/highlights/{id}`
-
-**Path Parameters:**
-
-- **`id`** (string, required) - The ID of the highlight to update.
-
-**Request Body:**
-
-The request body must be a JSON object with the following optional
-field:
-
-- **`note`** (string, optional) - The note for the highlight.
-
-**Response:**
-
-Returns the updated highlight object with all metadata fields.
-
-**Errors:**
-
-- `404 Not Found` - The highlight ID does not exist.
-
-**Example Request (Set Note):**
+### Update a Highlight Note
 
 ```bash
 curl -H "Authorization: Bearer your-api-token" \
@@ -1112,54 +770,7 @@ curl -H "Authorization: Bearer your-api-token" \
   http://localhost:9428/api/v1/highlights/highlight123
 ```
 
-**Example Request (Clear Note):**
-
-```bash
-curl -H "Authorization: Bearer your-api-token" \
-  -X PATCH \
-  -H "Content-Type: application/json" \
-  -d '{
-    "note": ""
-  }' \
-  http://localhost:9428/api/v1/highlights/highlight123
-```
-
-**Example Response:**
-
-```json
-{
-  "id": "highlight123",
-  "linkID": "abc123",
-  "content": "This is an important quote from the article.",
-  "markdownContent": "This is an **important** quote from the article.",
-  "note": "This is an important insight about the highlighted text.",
-  "createdAt": "2025-01-15T10:30:00Z"
-}
-```
-
-### Export Highlights
-
-Export highlights from a link using the export format template
-configured in GoodLinks settings.
-
-**Endpoint:** `GET /api/v1/links/{id}/highlights/export`
-
-**Path Parameters:**
-
-- **`id`** (string, required) - The unique identifier of the link.
-
-**Response:**
-
-Returns the highlights export content as Markdown. The response content
-type is `text/markdown`. The format follows your configured export
-template, which can be customized using Mustache templating.
-
-**Errors:**
-
-- `404 Not Found` - Link with the specified ID does not exist or the
-  link has no highlights.
-
-**Example Request:**
+### Export Link Highlights
 
 ```bash
 curl -H "Authorization: Bearer your-api-token" \
