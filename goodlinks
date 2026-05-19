@@ -149,12 +149,338 @@ format_json_response() {
   if [[ "$content_type" == application/json* ]]; then
     if (( JSON_OUTPUT )); then
       jq .
+    elif [[ -t 1 && "$formatter" != "raw" ]] && (( ! NUL_OUTPUT )); then
+      terminal_json "$formatter"
     else
       tabular_json "$formatter"
     fi
   else
     cat
   fi
+}
+
+terminal_width() {
+  if [[ -n "${COLUMNS:-}" && "$COLUMNS" -gt 0 ]]; then
+    print -r -- "$COLUMNS"
+  else
+    tput cols 2>/dev/null || print 80
+  fi
+}
+
+terminal_json() {
+  local formatter="$1"
+  local width
+  width="$(terminal_width)"
+
+  jq -rj --arg formatter "$formatter" --arg columns "$OUTPUT_COLUMNS" --argjson terminalWidth "$width" '
+    def clean:
+      if . == null then ""
+      elif type == "array" then map(tostring) | join(",")
+      else tostring
+      end
+      | gsub("[\t\r\n]"; " ");
+
+    def requested_columns($default):
+      if $columns == "" then
+        $default
+      else
+        $columns
+        | gsub("[[:space:]]+"; "")
+        | split(",")
+        | map(ascii_upcase)
+        | map(select(. != ""))
+      end;
+
+    def link_map:
+      {
+        ID: ["id"],
+        URL: ["url"],
+        TITLE: ["title"],
+        SUMMARY: ["summary"],
+        AUTHOR: ["author"],
+        TAGS: ["tags"],
+        WORDCOUNT: ["wordCount"],
+        STARRED: ["starred"],
+        HIGHLIGHTED: ["highlighted"],
+        ADDEDAT: ["addedAt"],
+        MODIFIEDAT: ["modifiedAt"],
+        READAT: ["readAt"]
+      };
+
+    def highlight_map:
+      {
+        ID: ["id"],
+        LINKID: ["linkID"],
+        CONTENT: ["content"],
+        MARKDOWNCONTENT: ["markdownContent"],
+        NOTE: ["note"],
+        CREATEDAT: ["createdAt"]
+      };
+
+    def list_map:
+      {ID: ["id"], NAME: ["name"]};
+
+    def generic_map:
+      {ID: ["id"], URL: ["url"], TITLE: ["title"], NAME: ["name"], LINKID: ["linkID"], CONTENT: ["content"], NOTE: ["note"]};
+
+    def data_rows:
+      if $formatter == "links" or $formatter == "highlights" then
+        if type == "object" and has("data") then .data else [.] end
+      elif $formatter == "lists" or $formatter == "tags" then
+        if type == "array" then . else [.] end
+      else
+        if type == "array" then . elif type == "object" and has("data") then .data else [.] end
+      end;
+
+    def columns:
+      if $formatter == "links" then requested_columns(["STARRED", "TITLE", "URL", "TAGS", "READAT"])
+      elif $formatter == "highlights" then requested_columns(["CONTENT", "CREATEDAT"])
+      elif $formatter == "lists" then requested_columns(["ID"])
+      elif $formatter == "tags" then requested_columns(["TAG"])
+      else requested_columns(["ID", "URL", "TITLE", "NAME", "LINKID", "CONTENT", "NOTE"])
+      end;
+
+    def validate_col($col; $map):
+      if $formatter == "tags" then
+        if $col == "TAG" then true else error("unknown output column for tags: " + $col) end
+      elif $map | has($col) then
+        true
+      else
+        error("unknown output column for " + $formatter + ": " + $col)
+      end;
+
+    def ellipsis($s; $width):
+      ($s | tostring) as $text
+      | ($width | floor) as $w
+      | if $w <= 0 then ""
+        elif ($text | length) <= $w then $text
+        elif $w == 1 then "…"
+        else ($text[0:($w - 1)] + "…")
+        end;
+
+    def strip_url:
+      clean
+      | sub("^[Hh][Tt][Tt][Pp][Ss]?://"; "")
+      | gsub("^([Ww][Ww][Ww][0-9]*\\.)+"; "");
+
+    def truncate_url($width):
+      strip_url as $url
+      | ($url | split("/")[0]) as $domain
+      | ($url | sub("^[^/]*"; "")) as $path
+      | if ($url | length) <= $width then $url
+        else
+          ([($domain | length), 30, $width] | min) as $domainWidth
+          | ellipsis($domain; $domainWidth) as $shownDomain
+          | if ($shownDomain | length) >= $width then
+              ellipsis($shownDomain; $width)
+            elif $path == "" then
+              $shownDomain
+            else
+              $shownDomain + ellipsis($path; ($width - ($shownDomain | length)))
+            end
+        end;
+
+    def format_timestamp($width):
+      clean as $value
+      | ($width | floor) as $w
+      | if $value == "" then ""
+        else
+          ($value[0:10]) as $date
+          | ($value[11:16]) as $time
+          | ($date[2:4] + $date[5:7] + $date[8:10]) as $compactDate
+          | if $w >= 20 and ($value | length) >= 20 then $value[0:20]
+            elif $w >= 16 and ($date | length) == 10 and ($time | length) == 5 then "\($date) \($time)"
+            elif $w >= 10 and ($date | length) == 10 then $date
+            elif $w >= 8 and ($date | length) == 10 then "\($date[2:4])-\($date[5:7])-\($date[8:10])"
+            elif $w >= 6 and ($date | length) == 10 then $compactDate
+            else ellipsis((if ($date | length) == 10 then $compactDate else $value end); $w)
+            end
+        end;
+
+    def tag_counts($rows):
+      reduce ($rows[] | (.tags // [])[]?) as $tag ({};
+        .[$tag] = ((.[$tag] // 0) + 1)
+      );
+
+    def format_tags($counts; $width):
+      (.tags // []) as $rawTags
+      | ($rawTags | unique | map({tag: ., count: ($counts[.] // 0)}) | sort_by(-.count, .tag) | map(.tag)) as $tags
+      | if ($tags | length) == 0 then ""
+        else
+          ($tags[0] | tostring) as $first
+          | (($tags | length) - 1) as $more
+          | if ($first | length) > $width then
+              if ($tags | length) == 1 then ellipsis($first; $width) else "\($tags | length) tags" end
+            elif $more == 0 then
+              ellipsis($first; $width)
+            else
+              ($first + " + \($more) more") as $full
+              | ("\($tags | length) tags") as $countText
+              | if ($full | length) <= $width then $full
+                elif ($countText | length) <= $width then $countText
+                else ellipsis($countText; $width)
+                end
+            end
+        end;
+
+    def terminal_value($row; $col; $map; $counts; $width):
+      if $formatter == "tags" and $col == "TAG" then $row | clean | ellipsis(.; $width)
+      elif $formatter == "links" and $col == "STARRED" then if $row.starred == true then "*" else "" end
+      elif $formatter == "links" and $col == "URL" then $row | getpath($map[$col]) | truncate_url($width)
+      elif $formatter == "links" and $col == "TAGS" then $row | format_tags($counts; $width)
+      elif ($col | test("AT$")) then $row | getpath($map[$col]) | format_timestamp($width)
+      elif $col == "TITLE" or $col == "SUMMARY" or $col == "CONTENT" or $col == "MARKDOWNCONTENT" or $col == "NOTE" then
+        $row | getpath($map[$col]) | clean | ellipsis(.; $width)
+      else
+        $row | getpath($map[$col]) | clean | ellipsis(.; $width)
+      end;
+
+    def header_name($col):
+      if $formatter == "links" and $col == "STARRED" then "S" else $col end;
+
+    def natural_value($row; $col; $map; $counts):
+      terminal_value($row; $col; $map; $counts; 100000);
+
+    def keep_nonempty_columns($rows; $cols; $map; $counts):
+      if $columns != "" then
+        $cols
+      else
+        $cols | map(select(
+          . as $col
+          | any($rows[]; natural_value(.; $col; $map; $counts) != "")
+        ))
+      end;
+
+    def max_natural_width($rows; $col; $map; $counts):
+      ([header_name($col) | length] + ($rows | map(natural_value(.; $col; $map; $counts) | length))) | max;
+
+    def min_width($col):
+      (header_name($col) | length) as $headerWidth
+      | (if $col == "STARRED" then 1
+      elif $col == "URL" then 10
+      elif $col == "TAGS" then 6
+      elif $col == "TITLE" or $col == "SUMMARY" or $col == "CONTENT" or $col == "MARKDOWNCONTENT" or $col == "NOTE" then 6
+      else ([($col | length), 4] | min)
+      end) as $valueWidth
+      | [$headerWidth, $valueWidth] | max;
+
+    def max_width($col):
+      if $formatter == "links" and $col == "URL" then
+        ([min_width($col), (($terminalWidth * 18 / 80) | floor)] | max)
+      elif ($col | test("AT$")) then
+        16
+      else
+        100000
+      end;
+
+    def cap_widths($widths; $cols):
+      reduce range(0; $widths | length) as $i ($widths;
+        .[$i] = ([.[$i], max_width($cols[$i])] | min)
+      );
+
+    def minimum_total_width($cols):
+      if ($cols | length) == 0 then
+        0
+      else
+        ($cols | map(min_width(.)) | add) + (($cols | length) - 1) * 3
+      end;
+
+    def flexible($col):
+      $col == "URL" or $col == "TAGS" or $col == "TITLE" or $col == "SUMMARY" or $col == "CONTENT" or $col == "MARKDOWNCONTENT" or $col == "NOTE" or ($col | test("AT$"));
+
+    def distribute($widths; $cols; $flex; $available):
+      (($widths | add) + (($widths | length) - 1) * 3) as $current
+      | if $current <= $available or ($flex | length) == 0 then
+          $widths
+        else
+          ($current - $available) as $over
+          | ([$flex[] as $i | {i: $i, spare: ([0, ($widths[$i] - min_width($cols[$i]))] | max)}]) as $spares
+          | ($spares | map(.spare) | add) as $totalSpare
+          | if $totalSpare <= 0 then $widths
+            else
+              reduce $spares[] as $s ($widths;
+                ($over * $s.spare / $totalSpare | ceil) as $cut
+                | .[$s.i] = ([min_width($cols[$s.i]), (.[$s.i] - $cut)] | max)
+              )
+            end
+        end;
+
+    def expand_url_when_title_fits($widths; $cols; $naturalRaw; $available):
+      ($cols | index("URL")) as $urlIndex
+      | ($cols | index("TITLE")) as $titleIndex
+      | (($widths | add) + (($cols | length) - 1) * 3) as $current
+      | ($available - $current) as $extra
+      | if $formatter == "links"
+          and $urlIndex != null
+          and $extra > 0
+          and ($titleIndex == null or $widths[$titleIndex] >= $naturalRaw[$titleIndex])
+        then
+          .[$urlIndex] = ([($widths[$urlIndex] + $extra), $naturalRaw[$urlIndex]] | min)
+        else
+          .
+        end;
+
+    def fit_widths($rows; $cols; $map; $counts):
+      ($cols | map(max_natural_width($rows; .; $map; $counts))) as $naturalRaw
+      | cap_widths($naturalRaw; $cols) as $natural
+      | ($cols | map(min_width(.))) as $mins
+      | (($natural | add) + (($cols | length) - 1) * 3) as $naturalTotal
+      | if $naturalTotal <= $terminalWidth then
+          $natural
+        else
+          ($cols | to_entries | map(select(flexible(.value))) | map(.key)) as $flex
+          | (reduce range(0; $natural | length) as $i ($natural;
+              if ($flex | index($i)) then . else .[$i] = $mins[$i] end
+            )) as $initial
+          | (($initial | add) + (($cols | length) - 1) * 3) as $initialTotal
+          | distribute($initial; $cols; $flex; $terminalWidth)
+        end
+      | expand_url_when_title_fits(.; $cols; $naturalRaw; $terminalWidth);
+
+    def pad($text; $width):
+      ellipsis($text; $width) as $fitted
+      | $fitted + (" " * ([0, ($width - ($fitted | length))] | max));
+
+    def center($text; $width):
+      ellipsis($text; $width) as $fitted
+      | ([0, ($width - ($fitted | length))] | max) as $space
+      | (" " * (($space / 2) | floor)) + $fitted + (" " * (($space / 2) | ceil));
+
+    def render($cells; $widths):
+      reduce range(0; $cells | length) as $i ("";
+        . + (if $i > 0 then " │ " else "" end) + pad($cells[$i]; $widths[$i])
+      );
+
+    def render_header($cells; $widths):
+      reduce range(0; $cells | length) as $i ("";
+        . + (if $i > 0 then " │ " else "" end) + center($cells[$i]; $widths[$i])
+      );
+
+    def ruler($widths):
+      reduce range(0; $widths | length) as $i ("";
+        . + (if $i > 0 then "─┼─" else "" end) + ("─" * $widths[$i])
+      );
+
+    data_rows as $rawRows
+    | columns as $cols
+    | (if $formatter == "links" then link_map
+       elif $formatter == "highlights" then highlight_map
+       elif $formatter == "lists" then list_map
+       elif $formatter == "tags" then {}
+       else generic_map
+       end) as $map
+    | (reduce $cols[] as $col (true; . and validate_col($col; $map)))
+    | tag_counts($rawRows) as $counts
+    | keep_nonempty_columns($rawRows; $cols; $map; $counts) as $visibleCols
+    | if minimum_total_width($visibleCols) > $terminalWidth then
+        error("terminal too narrow for requested columns: needs at least \(minimum_total_width($visibleCols)) columns, has \($terminalWidth)")
+      else . end
+    | fit_widths($rawRows; $visibleCols; $map; $counts) as $widths
+    | render_header(($visibleCols | map(header_name(.))); $widths), "\n",
+      ruler($widths), "\n",
+      ($rawRows[] as $row
+       | render(([$visibleCols | to_entries[] as $entry | terminal_value($row; $entry.value; $map; $counts; $widths[$entry.key])]); $widths), "\n")
+  '
 }
 
 tabular_json() {
@@ -194,6 +520,16 @@ tabular_json() {
         error("unknown output column for " + $formatter + ": " + $col)
       end;
 
+    def keep_nonempty_columns($rows; $cols; $map):
+      if $columns != "" then
+        $cols
+      else
+        $cols | map(select(
+          . as $col
+          | any($rows[]; pick(.; $col; $map) != "")
+        ))
+      end;
+
     def rows:
       if $formatter == "links" then
         requested_columns(["STARRED", "TITLE", "URL", "TAGS", "READAT"]) as $cols
@@ -211,9 +547,10 @@ tabular_json() {
             MODIFIEDAT: ["modifiedAt"],
             READAT: ["readAt"]
           } as $map
-        | [$cols]
-        + ((if has("data") then .data else [.] end)
-          | map(. as $row | [$cols[] as $col | pick($row; $col; $map)]))
+        | (if has("data") then .data else [.] end) as $data
+        | keep_nonempty_columns($data; $cols; $map) as $visibleCols
+        | [$visibleCols]
+        + ($data | map(. as $row | [$visibleCols[] as $col | pick($row; $col; $map)]))
       elif $formatter == "highlights" then
         requested_columns(["CONTENT", "CREATEDAT"]) as $cols
         | {
@@ -224,16 +561,21 @@ tabular_json() {
             NOTE: ["note"],
             CREATEDAT: ["createdAt"]
           } as $map
-        | [$cols]
-        + ((if has("data") then .data else [.] end)
-          | map(. as $row | [$cols[] as $col | pick($row; $col; $map)]))
+        | (if has("data") then .data else [.] end) as $data
+        | keep_nonempty_columns($data; $cols; $map) as $visibleCols
+        | [$visibleCols]
+        + ($data | map(. as $row | [$visibleCols[] as $col | pick($row; $col; $map)]))
       elif $formatter == "lists" then
         requested_columns(["ID"]) as $cols
         | {ID: ["id"], NAME: ["name"]} as $map
-        | [$cols] + (map(. as $row | [$cols[] as $col | pick($row; $col; $map)]))
+        | . as $data
+        | keep_nonempty_columns($data; $cols; $map) as $visibleCols
+        | [$visibleCols] + ($data | map(. as $row | [$visibleCols[] as $col | pick($row; $col; $map)]))
       elif $formatter == "tags" then
         requested_columns(["TAG"]) as $cols
-        | [$cols] + (map(. as $row | [$cols[] as $col | if $col == "TAG" then ($row | clean) else error("unknown output column for tags: " + $col) end]))
+        | . as $data
+        | (if $columns != "" then $cols else $cols | map(select(any($data[]; clean != ""))) end) as $visibleCols
+        | [$visibleCols] + ($data | map(. as $row | [$visibleCols[] as $col | if $col == "TAG" then ($row | clean) else error("unknown output column for tags: " + $col) end]))
       else
         requested_columns(["ID", "URL", "TITLE", "NAME", "LINKID", "CONTENT", "NOTE"]) as $cols
         | {
@@ -245,14 +587,15 @@ tabular_json() {
             CONTENT: ["content"],
             NOTE: ["note"]
           } as $map
-        | [$cols]
-        + ((if type == "array" then .
+        | (if type == "array" then .
             elif type == "object" and has("data") then .data
             else [.]
-            end)
-          | map(
+            end) as $data
+        | keep_nonempty_columns($data; $cols; $map) as $visibleCols
+        | [$visibleCols]
+        + ($data | map(
               if type == "object" then
-                . as $row | [$cols[] as $col | pick($row; $col; $map)]
+                . as $row | [$visibleCols[] as $col | pick($row; $col; $map)]
               else
                 [.] | map(clean)
               end

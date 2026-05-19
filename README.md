@@ -55,9 +55,16 @@ Run `./goodlinks --help` for the complete command surface.
 
 ## Output
 
-By default, JSON API responses are converted to aligned tabular rows with a
-header row. Columns are padded with tabs to common tab stops across the full
-response:
+By default, JSON API responses are converted to tabular rows with a header row.
+When writing to a terminal, columns are separated with ` │ ` and long values
+are shortened to keep each row on one line. When writing to a pipe or file,
+columns are padded with tabs to common tab stops across the full response:
+Terminal output includes a horizontal ruler below the header row.
+Terminal column headers are never truncated; if the requested columns cannot
+fit, the command exits with a terminal-too-narrow error.
+In terminal link output, the URL column is proportionally capped so title text
+keeps priority while wider terminals still show more of each URL.
+Timestamp columns shorten date-first as space tightens, down to `YYMMDD`.
 
 - links default: `STARRED TITLE URL TAGS READAT`
 - lists default: `ID`
@@ -68,6 +75,9 @@ Use `--json` to pretty-print the original JSON response. Use `--raw` for
 non-JSON bodies such as article content and highlight exports, or when you
 want the exact response body. Use `-0` to terminate tabular records with NUL
 instead of newline.
+
+Default output omits columns that have no values in the current response. Use
+`-O` to keep specific columns even when their values are empty.
 
 Use `-O` with comma-separated lowercase column names to select tabular columns:
 
