@@ -30,8 +30,9 @@ The default base URL is `http://localhost:9428/api/v1`. Override it with
 
 ```sh
 ./goodlinks links list --read false --search python --limit 20
-./goodlinks links list --read false | cut -f1
-./goodlinks -0 links list --read false | cut -z -f1 | xargs -0 -n1 echo
+./goodlinks -O id,title,url links list --read false
+./goodlinks -O id links list --read false | tail -n +2 | cut -f1
+./goodlinks -0 -O id links list --read false | cut -z -f1 | tail -z -n +2 | xargs -0 -n1 echo
 ./goodlinks --json links list --read false
 ./goodlinks links get --id abc123
 ./goodlinks links get-url --url "https://example.com/article"
@@ -58,12 +59,20 @@ By default, JSON API responses are converted to aligned tabular rows with a
 header row. Columns are padded with tabs to common tab stops across the full
 response:
 
-- links: `id url title starred readAt tags`
-- lists: `id name`
-- tags: `tag`
-- highlights: `id linkID content note createdAt`
+- links default: `STARRED TITLE URL TAGS READAT`
+- lists default: `ID`
+- tags default: `TAG`
+- highlights default: `CONTENT CREATEDAT`
 
 Use `--json` to pretty-print the original JSON response. Use `--raw` for
 non-JSON bodies such as article content and highlight exports, or when you
 want the exact response body. Use `-0` to terminate tabular records with NUL
 instead of newline.
+
+Use `-O` with comma-separated lowercase column names to select tabular columns:
+
+```sh
+./goodlinks -O id,title,url links list
+./goodlinks -O id,name lists list
+./goodlinks -O id,content,note highlights list
+```

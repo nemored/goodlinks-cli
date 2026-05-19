@@ -11,6 +11,7 @@ TOKEN="${GOODLINKS_TOKEN:-}"
 RAW_OUTPUT=0
 JSON_OUTPUT=0
 NUL_OUTPUT=0
+OUTPUT_COLUMNS=""
 
 die() {
   print -u2 "goodlinks: $*"
@@ -33,14 +34,15 @@ Global options:
   --base-url <url>      API base URL. Defaults to GOODLINKS_BASE_URL or http://localhost:9428/api/v1.
   --json               Pretty-print JSON responses.
   --raw                Print response body exactly as returned.
+  -O <columns>         Select comma-separated tabular output columns, using lowercase names.
   -0                   Separate tabular records with NUL instead of newline.
   -h, --help           Show help.
 
 Default tabular fields:
-  links:       id url title starred readAt tags
-  lists:       id name
-  tags:        tag
-  highlights:  id linkID content note createdAt
+  links:       STARRED TITLE URL TAGS READAT
+  lists:       ID
+  tags:        TAG
+  highlights:  CONTENT CREATEDAT
 
 Token commands:
   config set-token <token>
@@ -82,7 +84,8 @@ Highlight filters:
 
 Examples:
   goodlinks links list --read false --search python --limit 20
-  goodlinks -0 links list --read false | cut -z -f1 | xargs -0 -n1 echo
+  goodlinks -O id,title,url links list --read false
+  goodlinks -0 -O id links list --read false | cut -z -f1 | xargs -0 -n1 echo
   goodlinks --json links get --id abc123
   goodlinks links add --url https://example.com --tag reading --starred true
   goodlinks --raw links content --id abc123 --format markdown
@@ -163,7 +166,7 @@ tabular_json() {
     separator='"\u0000"'
   fi
 
-  jq -rj --arg formatter "$formatter" --argjson separator "$separator" --argjson tabWidth "$tab_width" '
+  jq -rj --arg formatter "$formatter" --arg columns "$OUTPUT_COLUMNS" --argjson separator "$separator" --argjson tabWidth "$tab_width" '
     def clean:
       if . == null then ""
       elif type == "array" then map(tostring) | join(",")
@@ -171,28 +174,83 @@ tabular_json() {
       end
       | gsub("[\t\r\n]"; " ");
 
+    def requested_columns($default):
+      if $columns == "" then
+        $default
+      else
+        $columns
+        | gsub("[[:space:]]+"; "")
+        | split(",")
+        | map(ascii_upcase)
+        | map(select(. != ""))
+      end;
+
+    def pick($row; $col; $map):
+      if $map | has($col) then
+        $row | getpath($map[$col]) | clean
+      else
+        error("unknown output column for " + $formatter + ": " + $col)
+      end;
+
     def rows:
       if $formatter == "links" then
-        [["ID", "URL", "TITLE", "STARRED", "READAT", "TAGS"]]
+        requested_columns(["STARRED", "TITLE", "URL", "TAGS", "READAT"]) as $cols
+        | {
+            ID: ["id"],
+            URL: ["url"],
+            TITLE: ["title"],
+            SUMMARY: ["summary"],
+            AUTHOR: ["author"],
+            TAGS: ["tags"],
+            WORDCOUNT: ["wordCount"],
+            STARRED: ["starred"],
+            HIGHLIGHTED: ["highlighted"],
+            ADDEDAT: ["addedAt"],
+            MODIFIEDAT: ["modifiedAt"],
+            READAT: ["readAt"]
+          } as $map
+        | [$cols]
         + ((if has("data") then .data else [.] end)
-          | map([.id, .url, .title, .starred, .readAt, .tags] | map(clean)))
+          | map(. as $row | [$cols[] as $col | pick($row; $col; $map)]))
       elif $formatter == "highlights" then
-        [["ID", "LINKID", "CONTENT", "NOTE", "CREATEDAT"]]
+        requested_columns(["CONTENT", "CREATEDAT"]) as $cols
+        | {
+            ID: ["id"],
+            LINKID: ["linkID"],
+            CONTENT: ["content"],
+            MARKDOWNCONTENT: ["markdownContent"],
+            NOTE: ["note"],
+            CREATEDAT: ["createdAt"]
+          } as $map
+        | [$cols]
         + ((if has("data") then .data else [.] end)
-          | map([.id, .linkID, .content, .note, .createdAt] | map(clean)))
+          | map(. as $row | [$cols[] as $col | pick($row; $col; $map)]))
       elif $formatter == "lists" then
-        [["ID", "NAME"]] + (map([.id, .name] | map(clean)))
+        requested_columns(["ID"]) as $cols
+        | {ID: ["id"], NAME: ["name"]} as $map
+        | [$cols] + (map(. as $row | [$cols[] as $col | pick($row; $col; $map)]))
       elif $formatter == "tags" then
-        [["TAG"]] + (map([.] | map(clean)))
+        requested_columns(["TAG"]) as $cols
+        | [$cols] + (map(. as $row | [$cols[] as $col | if $col == "TAG" then ($row | clean) else error("unknown output column for tags: " + $col) end]))
       else
-        [["ID", "URL", "TITLE", "NAME", "LINKID", "CONTENT", "NOTE"]]
+        requested_columns(["ID", "URL", "TITLE", "NAME", "LINKID", "CONTENT", "NOTE"]) as $cols
+        | {
+            ID: ["id"],
+            URL: ["url"],
+            TITLE: ["title"],
+            NAME: ["name"],
+            LINKID: ["linkID"],
+            CONTENT: ["content"],
+            NOTE: ["note"]
+          } as $map
+        | [$cols]
         + ((if type == "array" then .
             elif type == "object" and has("data") then .data
             else [.]
             end)
           | map(
               if type == "object" then
-                [.id, .url, .title, .name, .linkID, .content, .note] | map(clean)
+                . as $row | [$cols[] as $col | pick($row; $col; $map)]
               else
                 [.] | map(clean)
               end
@@ -619,6 +677,7 @@ main() {
       --base-url) BASE_URL="${2:?missing value for --base-url}"; shift 2 ;;
       --json) JSON_OUTPUT=1; shift ;;
       --raw) RAW_OUTPUT=1; shift ;;
+      -O) OUTPUT_COLUMNS="${2:?missing value for -O}"; shift 2 ;;
       -0) NUL_OUTPUT=1; shift ;;
       -h|--help) usage; exit 0 ;;
       --) shift; break ;;
