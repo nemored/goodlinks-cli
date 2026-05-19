@@ -9,6 +9,8 @@ TOKEN_FILE="$CONFIG_DIR/token"
 BASE_URL="${GOODLINKS_BASE_URL:-$BASE_URL_DEFAULT}"
 TOKEN="${GOODLINKS_TOKEN:-}"
 RAW_OUTPUT=0
+JSON_OUTPUT=0
+NUL_OUTPUT=0
 
 die() {
   print -u2 "goodlinks: $*"
@@ -29,8 +31,16 @@ Usage:
 Global options:
   --token <token>       API token. Defaults to GOODLINKS_TOKEN or config token.
   --base-url <url>      API base URL. Defaults to GOODLINKS_BASE_URL or http://localhost:9428/api/v1.
+  --json               Pretty-print JSON responses.
   --raw                Print response body exactly as returned.
+  -0                   Separate tabular records with NUL instead of newline.
   -h, --help           Show help.
+
+Default tabular fields:
+  links:       id url title starred readAt tags
+  lists:       id name
+  tags:        tag
+  highlights:  id linkID content note createdAt
 
 Token commands:
   config set-token <token>
@@ -72,6 +82,8 @@ Highlight filters:
 
 Examples:
   goodlinks links list --read false --search python --limit 20
+  goodlinks -0 links list --read false | cut -z -f1 | xargs -0 -n1 echo
+  goodlinks --json links get --id abc123
   goodlinks links add --url https://example.com --tag reading --starred true
   goodlinks --raw links content --id abc123 --format markdown
   goodlinks highlights update --id highlight123 --note "Key insight"
@@ -122,8 +134,9 @@ make_url() {
   print -r -- "$url"
 }
 
-pretty_or_raw() {
+format_json_response() {
   local content_type="$1"
+  local formatter="$2"
 
   if (( RAW_OUTPUT )); then
     cat
@@ -131,17 +144,73 @@ pretty_or_raw() {
   fi
 
   if [[ "$content_type" == application/json* ]]; then
-    jq .
+    if (( JSON_OUTPUT )); then
+      jq .
+    else
+      tabular_json "$formatter"
+    fi
   else
     cat
   fi
+}
+
+tabular_json() {
+  local formatter="$1"
+  local separator='"\n"'
+
+  if (( NUL_OUTPUT )); then
+    separator='"\u0000"'
+  fi
+
+  jq -rj --arg formatter "$formatter" --argjson separator "$separator" '
+    def clean:
+      if . == null then ""
+      elif type == "array" then map(tostring) | join(",")
+      else tostring
+      end;
+
+    def emit($fields):
+      ($fields | map(clean) | @tsv), $separator;
+
+    def link_rows:
+      emit([.id, .url, .title, .starred, .readAt, .tags]);
+
+    def highlight_rows:
+      emit([.id, .linkID, .content, .note, .createdAt]);
+
+    def list_rows:
+      emit([.id, .name]);
+
+    def tag_rows:
+      emit([.]);
+
+    def generic_rows:
+      if type == "object" then
+        emit([.id, .url, .title, .name, .linkID, .content, .note])
+      else
+        emit([.])
+      end;
+
+    if $formatter == "links" then
+      (if has("data") then .data[] else . end) | link_rows
+    elif $formatter == "highlights" then
+      (if has("data") then .data[] else . end) | highlight_rows
+    elif $formatter == "lists" then
+      .[] | list_rows
+    elif $formatter == "tags" then
+      .[] | tag_rows
+    else
+      (if type == "array" then .[] elif type == "object" and has("data") then .data[] else . end) | generic_rows
+    end
+  '
 }
 
 request() {
   local method="$1"
   local endpoint_path="$2"
   local body="${3:-}"
-  shift 3 || true
+  local formatter="${4:-generic}"
+  shift 4 || true
   local query=("$@")
 
   read_token
@@ -191,7 +260,7 @@ request() {
   fi
 
   if [[ "$http_status" != "204" && -s "$body_file" ]]; then
-    pretty_or_raw "$content_type" < "$body_file"
+    format_json_response "$content_type" "$formatter" < "$body_file"
   fi
 
   rm -f "$headers" "$body_file"
@@ -239,7 +308,7 @@ links_cmd() {
     list)
       local query=()
       parse_link_filters query "$@"
-      request GET /links "" "${query[@]}"
+      request GET /links "" links "${query[@]}"
       ;;
     get)
       local id=""
@@ -250,7 +319,7 @@ links_cmd() {
         esac
       done
       [[ -n "$id" ]] || die "links get requires --id"
-      request GET "/links/$(urlencode "$id")" ""
+      request GET "/links/$(urlencode "$id")" "" links
       ;;
     get-url)
       local url="" query=()
@@ -262,10 +331,10 @@ links_cmd() {
       done
       [[ -n "$url" ]] || die "links get-url requires --url"
       append_query query url "$url"
-      request GET /links "" "${query[@]}"
+      request GET /links "" links "${query[@]}"
       ;;
     current)
-      request GET /links/current ""
+      request GET /links/current "" links
       ;;
     add)
       local url="" title="" summary="" read="" starred="" added_at=""
@@ -299,7 +368,7 @@ links_cmd() {
         | if $read != "" then .read=($read == "true") else . end
         | if $starred != "" then .starred=($starred == "true") else . end
         | if $addedAt != "" then .addedAt=$addedAt else . end')"
-      request POST /links "$body"
+      request POST /links "$body" links
       ;;
     update)
       local id="" title="" summary="" read="" starred="" clear_tags=0
@@ -337,7 +406,7 @@ links_cmd() {
         | if $clearTags == 1 then .tags=[] elif ($tags|length) > 0 then .tags=$tags else . end
         | if ($addedTags|length) > 0 then .addedTags=$addedTags else . end
         | if ($removedTags|length) > 0 then .removedTags=$removedTags else . end')"
-      request PATCH "/links/$(urlencode "$id")" "$body"
+      request PATCH "/links/$(urlencode "$id")" "$body" links
       ;;
     delete)
       local ids=() query=()
@@ -351,7 +420,7 @@ links_cmd() {
       for id in "${ids[@]}"; do
         append_query query id "$id"
       done
-      request DELETE /links "" "${query[@]}"
+      request DELETE /links "" generic "${query[@]}"
       ;;
     content)
       local id="" format="" auto_download="" query=()
@@ -366,7 +435,7 @@ links_cmd() {
       [[ -n "$id" ]] || die "links content requires --id"
       append_query query format "$format"
       append_query query autoDownload "$auto_download"
-      request GET "/links/$(urlencode "$id")/content" "" "${query[@]}"
+      request GET "/links/$(urlencode "$id")/content" "" raw "${query[@]}"
       ;;
     *) die "unknown links subcommand: $sub" ;;
   esac
@@ -379,7 +448,7 @@ lists_cmd() {
 
   case "$sub" in
     list)
-      request GET /lists ""
+      request GET /lists "" lists
       ;;
     get)
       local list="" search="" include_read="" limit="" offset=""
@@ -403,7 +472,7 @@ lists_cmd() {
       append_query query includeRead "$include_read"
       append_query query limit "$limit"
       append_query query offset "$offset"
-      request GET "/lists/$(urlencode "$list")" "" "${query[@]}"
+      request GET "/lists/$(urlencode "$list")" "" links "${query[@]}"
       ;;
     *) die "unknown lists subcommand: $sub" ;;
   esac
@@ -412,7 +481,7 @@ lists_cmd() {
 tags_cmd() {
   local sub="${1:-}"
   case "$sub" in
-    list) request GET /tags "" ;;
+    list) request GET /tags "" tags ;;
     *) die "unknown tags subcommand: ${sub:-}" ;;
   esac
 }
@@ -439,7 +508,7 @@ highlights_cmd() {
           *) die "unknown highlights list option: $1" ;;
         esac
       done
-      request GET /highlights "" "${query[@]}"
+      request GET /highlights "" highlights "${query[@]}"
       ;;
     update)
       local id="" note="" note_set=0
@@ -454,7 +523,7 @@ highlights_cmd() {
       (( note_set )) || die "highlights update requires --note"
       local body
       body="$(jq -cn --arg note "$note" '{note:$note}')"
-      request PATCH "/highlights/$(urlencode "$id")" "$body"
+      request PATCH "/highlights/$(urlencode "$id")" "$body" highlights
       ;;
     export)
       local link_id=""
@@ -465,7 +534,7 @@ highlights_cmd() {
         esac
       done
       [[ -n "$link_id" ]] || die "highlights export requires --link-id"
-      request GET "/links/$(urlencode "$link_id")/highlights/export" ""
+      request GET "/links/$(urlencode "$link_id")/highlights/export" "" raw
       ;;
     *) die "unknown highlights subcommand: $sub" ;;
   esac
@@ -505,7 +574,9 @@ main() {
     case "$1" in
       --token) TOKEN="${2:?missing value for --token}"; shift 2 ;;
       --base-url) BASE_URL="${2:?missing value for --base-url}"; shift 2 ;;
+      --json) JSON_OUTPUT=1; shift ;;
       --raw) RAW_OUTPUT=1; shift ;;
+      -0) NUL_OUTPUT=1; shift ;;
       -h|--help) usage; exit 0 ;;
       --) shift; break ;;
       -*) die "unknown global option: $1" ;;
