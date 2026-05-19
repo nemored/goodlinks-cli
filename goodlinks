@@ -157,51 +157,91 @@ format_json_response() {
 tabular_json() {
   local formatter="$1"
   local separator='"\n"'
+  local tab_width=8
 
   if (( NUL_OUTPUT )); then
     separator='"\u0000"'
   fi
 
-  jq -rj --arg formatter "$formatter" --argjson separator "$separator" '
+  jq -rj --arg formatter "$formatter" --argjson separator "$separator" --argjson tabWidth "$tab_width" '
     def clean:
       if . == null then ""
       elif type == "array" then map(tostring) | join(",")
       else tostring
-      end;
+      end
+      | gsub("[\t\r\n]"; " ");
 
-    def emit($fields):
-      ($fields | map(clean) | @tsv), $separator;
-
-    def link_rows:
-      emit([.id, .url, .title, .starred, .readAt, .tags]);
-
-    def highlight_rows:
-      emit([.id, .linkID, .content, .note, .createdAt]);
-
-    def list_rows:
-      emit([.id, .name]);
-
-    def tag_rows:
-      emit([.]);
-
-    def generic_rows:
-      if type == "object" then
-        emit([.id, .url, .title, .name, .linkID, .content, .note])
+    def rows:
+      if $formatter == "links" then
+        (if has("data") then .data else [.] end)
+        | map([.id, .url, .title, .starred, .readAt, .tags] | map(clean))
+      elif $formatter == "highlights" then
+        (if has("data") then .data else [.] end)
+        | map([.id, .linkID, .content, .note, .createdAt] | map(clean))
+      elif $formatter == "lists" then
+        map([.id, .name] | map(clean))
+      elif $formatter == "tags" then
+        map([.] | map(clean))
       else
-        emit([.])
+        (if type == "array" then .
+         elif type == "object" and has("data") then .data
+         else [.]
+         end)
+        | map(
+            if type == "object" then
+              [.id, .url, .title, .name, .linkID, .content, .note] | map(clean)
+            else
+              [.] | map(clean)
+            end
+          )
       end;
 
-    if $formatter == "links" then
-      (if has("data") then .data[] else . end) | link_rows
-    elif $formatter == "highlights" then
-      (if has("data") then .data[] else . end) | highlight_rows
-    elif $formatter == "lists" then
-      .[] | list_rows
-    elif $formatter == "tags" then
-      .[] | tag_rows
-    else
-      (if type == "array" then .[] elif type == "object" and has("data") then .data[] else . end) | generic_rows
-    end
+    def column_widths($rows):
+      reduce $rows[] as $row ([];
+        reduce range(0; $row | length) as $i (.;
+          .[$i] = ([.[$i] // 0, ($row[$i] | length)] | max)
+        )
+      );
+
+    def tab_targets($widths):
+      reduce range(0; (($widths | length) - 1)) as $i ({starts: [0], targets: []};
+        . as $state
+        | $state.starts[$i] as $start
+        | (((($start + $widths[$i]) / $tabWidth) | floor) + 1) as $targetTabs
+        | ($targetTabs * $tabWidth) as $target
+        | $state
+        | .targets[$i] = $target
+        | .starts[$i + 1] = $target
+      )
+      | .targets;
+
+    def tab_pad($position; $target):
+      ((($target / $tabWidth) | floor) - (($position / $tabWidth) | floor)) as $tabs
+      | "\t" * $tabs;
+
+    def render_row($targets):
+      . as $row
+      | reduce range(0; $row | length) as $i ({text: "", position: 0};
+          .text += $row[$i]
+          | .position += ($row[$i] | length)
+          | if $i < (($row | length) - 1) then
+              tab_pad(.position; $targets[$i]) as $tabs
+              | .text += $tabs
+              | .position = $targets[$i]
+            else
+              .
+            end
+        )
+      | .text;
+
+    rows as $rows
+    | if ($rows | length) == 0 then empty
+      else
+        column_widths($rows) as $widths
+        | tab_targets($widths) as $targets
+        | $rows[]
+        | render_row($targets), $separator
+      end
   '
 }
 
