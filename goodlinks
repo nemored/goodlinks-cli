@@ -173,27 +173,30 @@ tabular_json() {
 
     def rows:
       if $formatter == "links" then
-        (if has("data") then .data else [.] end)
-        | map([.id, .url, .title, .starred, .readAt, .tags] | map(clean))
+        [["ID", "URL", "TITLE", "STARRED", "READAT", "TAGS"]]
+        + ((if has("data") then .data else [.] end)
+          | map([.id, .url, .title, .starred, .readAt, .tags] | map(clean)))
       elif $formatter == "highlights" then
-        (if has("data") then .data else [.] end)
-        | map([.id, .linkID, .content, .note, .createdAt] | map(clean))
+        [["ID", "LINKID", "CONTENT", "NOTE", "CREATEDAT"]]
+        + ((if has("data") then .data else [.] end)
+          | map([.id, .linkID, .content, .note, .createdAt] | map(clean)))
       elif $formatter == "lists" then
-        map([.id, .name] | map(clean))
+        [["ID", "NAME"]] + (map([.id, .name] | map(clean)))
       elif $formatter == "tags" then
-        map([.] | map(clean))
+        [["TAG"]] + (map([.] | map(clean)))
       else
-        (if type == "array" then .
-         elif type == "object" and has("data") then .data
-         else [.]
-         end)
-        | map(
-            if type == "object" then
-              [.id, .url, .title, .name, .linkID, .content, .note] | map(clean)
-            else
-              [.] | map(clean)
-            end
-          )
+        [["ID", "URL", "TITLE", "NAME", "LINKID", "CONTENT", "NOTE"]]
+        + ((if type == "array" then .
+            elif type == "object" and has("data") then .data
+            else [.]
+            end)
+          | map(
+              if type == "object" then
+                [.id, .url, .title, .name, .linkID, .content, .note] | map(clean)
+              else
+                [.] | map(clean)
+              end
+            ))
       end;
 
     def column_widths($rows):

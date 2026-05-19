@@ -54,8 +54,9 @@ Run `./goodlinks --help` for the complete command surface.
 
 ## Output
 
-By default, JSON API responses are converted to aligned tabular rows. Columns
-are padded with tabs to common tab stops across the full response:
+By default, JSON API responses are converted to aligned tabular rows with a
+header row. Columns are padded with tabs to common tab stops across the full
+response:
 
 - links: `id url title starred readAt tags`
 - lists: `id name`
