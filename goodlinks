@@ -298,9 +298,13 @@ terminal_json() {
         end;
 
     def tag_counts($rows):
-      reduce ($rows[] | (.tags // [])[]?) as $tag ({};
-        .[$tag] = ((.[$tag] // 0) + 1)
-      );
+      if $formatter == "links" then
+        reduce ($rows[] | (.tags // [])[]?) as $tag ({};
+          .[$tag] = ((.[$tag] // 0) + 1)
+        )
+      else
+        {}
+      end;
 
     def format_tags($counts; $width):
       (.tags // []) as $rawTags
