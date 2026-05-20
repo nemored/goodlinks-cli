@@ -26,10 +26,37 @@ GOODLINKS_TOKEN="your-api-token" ./goodlinks links list
 The default base URL is `http://localhost:9428/api/v1`. Override it with
 `GOODLINKS_BASE_URL` or `--base-url`.
 
+## Proxy mode
+
+For agent or automation workflows, you can keep the GoodLinks API token outside
+the agent sandbox by running a trusted local proxy that injects the
+`Authorization: Bearer <token>` header. Point `goodlinks` at the proxy and use
+`--no-auth` so the CLI does not read a token or send an authorization header:
+
+```sh
+GOODLINKS_TOKEN="your-api-token" caddy run --config Caddyfile
+```
+
+```sh
+./goodlinks --no-auth --base-url http://127.0.0.1:19428/api/v1 links list --read false
+```
+
+You can also enable tokenless mode with an environment variable:
+
+```sh
+GOODLINKS_NO_AUTH=1 GOODLINKS_BASE_URL=http://127.0.0.1:19428/api/v1 ./goodlinks tags list
+```
+
+The included `Caddyfile` forwards requests to GoodLinks at
+`http://localhost:9428/api/v1` and adds the API token. It does not enforce
+read-only access or an endpoint allowlist. Only use `--no-auth` with a proxy
+you trust.
+
 ## Examples
 
 ```sh
 ./goodlinks links list --read false --search python --limit 20
+./goodlinks --no-auth --base-url http://127.0.0.1:19428/api/v1 links list --read false
 ./goodlinks -O id,title,url links list --read false
 ./goodlinks -O id links list --read false | tail -n +2 | cut -f1
 ./goodlinks -0 -O id links list --read false | cut -z -f1 | tail -z -n +2 | xargs -0 -n1 echo

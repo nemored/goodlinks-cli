@@ -8,6 +8,7 @@ TOKEN_FILE="$CONFIG_DIR/token"
 
 BASE_URL="${GOODLINKS_BASE_URL:-$BASE_URL_DEFAULT}"
 TOKEN="${GOODLINKS_TOKEN:-}"
+NO_AUTH="${GOODLINKS_NO_AUTH:-0}"
 RAW_OUTPUT=0
 JSON_OUTPUT=0
 NUL_OUTPUT=0
@@ -32,6 +33,7 @@ Usage:
 Global options:
   --token <token>       API token. Defaults to GOODLINKS_TOKEN or config token.
   --base-url <url>      API base URL. Defaults to GOODLINKS_BASE_URL or http://localhost:9428/api/v1.
+  --no-auth             Do not read or send an API token. Use only with a trusted local proxy.
   --json               Pretty-print JSON responses.
   --raw                Print response body exactly as returned.
   -O <columns>         Select comma-separated tabular output columns, using lowercase names.
@@ -84,6 +86,7 @@ Highlight filters:
 
 Examples:
   goodlinks links list --read false --search python --limit 20
+  goodlinks --no-auth --base-url http://127.0.0.1:19428/api/v1 links list --read false
   goodlinks -O id,title,url links list --read false
   goodlinks -0 -O id links list --read false | cut -z -f1 | xargs -0 -n1 echo
   goodlinks --json links get --id abc123
@@ -91,6 +94,10 @@ Examples:
   goodlinks --raw links content --id abc123 --format markdown
   goodlinks highlights update --id highlight123 --note "Key insight"
 EOF
+}
+
+auth_disabled() {
+  [[ "$NO_AUTH" == "1" || "$NO_AUTH" == "true" || "$NO_AUTH" == "yes" ]]
 }
 
 read_token() {
@@ -663,8 +670,10 @@ request() {
   shift 4 || true
   local query=("$@")
 
-  read_token
-  [[ -n "$TOKEN" ]] || die "API token required. Set GOODLINKS_TOKEN or run: goodlinks config set-token <token>"
+  if ! auth_disabled; then
+    read_token
+    [[ -n "$TOKEN" ]] || die "API token required. Set GOODLINKS_TOKEN, run: goodlinks config set-token <token>, or use --no-auth with a trusted proxy"
+  fi
 
   local url
   url="$(make_url "$endpoint_path" "${query[@]}")"
@@ -680,8 +689,11 @@ request() {
     --request "$method"
     --dump-header "$headers"
     --output "$body_file"
-    --header "Authorization: Bearer $TOKEN"
   )
+
+  if ! auth_disabled; then
+    curl_args+=(--header "Authorization: Bearer $TOKEN")
+  fi
 
   if [[ -n "$body" ]]; then
     curl_args+=(--header "Content-Type: application/json" --data "$body")
@@ -1004,12 +1016,17 @@ config_cmd() {
       print "Token saved to $TOKEN_FILE"
       ;;
     show)
-      read_token
       print "baseUrl: $BASE_URL"
-      if [[ -n "$TOKEN" ]]; then
-        print "token: configured"
+      if auth_disabled; then
+        print "auth: disabled"
       else
-        print "token: missing"
+        read_token
+        print "auth: token"
+        if [[ -n "$TOKEN" ]]; then
+          print "token: configured"
+        else
+          print "token: missing"
+        fi
       fi
       ;;
     *) die "unknown config subcommand: ${sub:-}" ;;
@@ -1024,6 +1041,7 @@ main() {
     case "$1" in
       --token) TOKEN="${2:?missing value for --token}"; shift 2 ;;
       --base-url) BASE_URL="${2:?missing value for --base-url}"; shift 2 ;;
+      --no-auth) NO_AUTH=1; shift ;;
       --json) JSON_OUTPUT=1; shift ;;
       --raw) RAW_OUTPUT=1; shift ;;
       -O) OUTPUT_COLUMNS="${2:?missing value for -O}"; shift 2 ;;
